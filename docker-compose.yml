@@ -1,0 +1,53 @@
+﻿version: "3.9"
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: nexaagent_postgres
+    environment:
+      POSTGRES_DB: nexaagent
+      POSTGRES_USER: nexaagent
+      POSTGRES_PASSWORD: nexaagent_secret
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U nexaagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  redis:
+    image: redis:7-alpine
+    container_name: nexaagent_redis
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: nexaagent_chroma
+    ports: ["8001:8000"]
+    volumes: [chroma_data:/chroma/chroma]
+  backend:
+    build: .
+    container_name: nexaagent_backend
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    volumes: ["./chroma_db:/app/chroma_db","./backend:/app/backend"]
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+  frontend:
+    image: node:20-alpine
+    container_name: nexaagent_frontend
+    working_dir: /app
+    volumes: ["./frontend:/app"]
+    ports: ["3000:3000"]
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on: [backend]
+volumes:
+  postgres_data:
+  redis_data:
+  chroma_data:
