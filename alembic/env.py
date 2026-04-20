@@ -1,18 +1,22 @@
-﻿"""Alembic async migration environment."""
-import asyncio
+"""Alembic async migration environment â€” reads DATABASE_URL from env."""
+import asyncio, os
 from logging.config import fileConfig
-from sqlalchemy import pool
-from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import pool
 from alembic import context
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from backend.database import Base
-from backend import models  # noqa â€” register all models
 
 config = context.config
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Always prefer DATABASE_URL env var (set by docker-compose)
+db_url = os.environ.get("DATABASE_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
+
+from backend.database import Base
+from backend import models  # noqa â€” register all ORM models
 
 target_metadata = Base.metadata
 
@@ -25,7 +29,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection: Connection) -> None:
+def do_run_migrations(connection):
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
@@ -34,7 +38,8 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.", poolclass=pool.NullPool,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

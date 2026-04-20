@@ -1,7 +1,6 @@
-﻿# backend/routers/agents_ops.py
-# Human-agent operations: login, queue, claim, message, resolve, transfer, SSE.
+# backend/routers/agents_ops.py
 from __future__ import annotations
-import asyncio, json
+import json
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -20,7 +19,6 @@ from ..schemas import AgentOut, AgentStatusUpdate, TicketOut, TokenResponse
 
 router   = APIRouter(prefix='/agent', tags=['human-agent'])
 pwd      = CryptContext(schemes=['bcrypt'], deprecated='auto')
-_now     = lambda: datetime.now(timezone.utc)
 SLA_SECS = 4 * 3600
 
 
@@ -28,12 +26,15 @@ class AgentLogin(BaseModel):
     email: str
     password: str
 
+
 class AgentMessageBody(BaseModel):
     content: str = Field(min_length=1, max_length=4096)
 
+
 class ResolveBody(BaseModel):
-    resolution_notes: str       = Field(min_length=10, max_length=4096)
+    resolution_notes: str = Field(min_length=10, max_length=4096)
     satisfaction_prompted: bool = False
+
 
 class TransferBody(BaseModel):
     target_agent_id: str
@@ -66,15 +67,21 @@ async def get_queue(
         if not ticket:
             continue
         msgs_r = await db.execute(
-            select(Message).where(Message.conversation_id == ticket.conversation_id)
-            .order_by(Message.created_at.desc()).limit(3)
+            select(Message)
+            .where(Message.conversation_id == ticket.conversation_id)
+            .order_by(Message.created_at.desc())
+            .limit(3)
         )
         msgs = list(reversed(msgs_r.scalars().all()))
         previews.append({
-            'ticket_id': ticket.ticket_id, 'priority': ticket.priority,
-            'status': ticket.status, 'escalation_reason': ticket.escalation_reason,
+            'ticket_id': ticket.ticket_id,
+            'priority': ticket.priority,
+            'status': ticket.status,
+            'escalation_reason': ticket.escalation_reason,
             'created_at': ticket.created_at.isoformat(),
-            'conversation_preview': [{'role': m.role, 'content': m.content[:200]} for m in msgs],
+            'conversation_preview': [
+                {'role': m.role, 'content': m.content[:200]} for m in msgs
+            ],
         })
     return {'depth': depth, 'tickets': previews}
 
@@ -93,12 +100,18 @@ async def claim_next(
     if not ticket:
         raise HTTPException(404, 'No tickets in queue')
     msgs_r = await db.execute(
-        select(Message).where(Message.conversation_id == ticket.conversation_id)
+        select(Message)
+        .where(Message.conversation_id == ticket.conversation_id)
         .order_by(Message.created_at.asc())
     )
     messages = [
-        {'role': m.role, 'content': m.content, 'created_at': m.created_at.isoformat(),
-         'intent': m.intent_label, 'sentiment': m.sentiment_label}
+        {
+            'role': m.role,
+            'content': m.content,
+            'created_at': m.created_at.isoformat(),
+            'intent': m.intent_label,
+            'sentiment': m.sentiment_label,
+        }
         for m in msgs_r.scalars().all()
     ]
     return {'ticket': TicketOut.model_validate(ticket).model_dump(), 'conversation': messages}
@@ -106,7 +119,8 @@ async def claim_next(
 
 @router.post('/tickets/{ticket_id}/message')
 async def send_message(
-    ticket_id: str, body: AgentMessageBody,
+    ticket_id: str,
+    body: AgentMessageBody,
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
     agent: HumanAgent = Depends(get_current_agent),
@@ -117,24 +131,33 @@ async def send_message(
         raise HTTPException(404, 'Ticket not found')
     if ticket.assigned_agent_id != agent.agent_id:
         raise HTTPException(403, 'Not your ticket')
-    msg = Message(conversation_id=ticket.conversation_id, role='agent', content=body.content)
+    msg = Message(
+        conversation_id=ticket.conversation_id,
+        role='agent',
+        content=body.content,
+    )
     db.add(msg)
     await db.execute(
-        update(Conversation).where(Conversation.conversation_id == ticket.conversation_id)
+        update(Conversation)
+        .where(Conversation.conversation_id == ticket.conversation_id)
         .values(total_messages=Conversation.total_messages + 1)
     )
     await db.commit()
     await db.refresh(msg)
-    await redis.publish(
-        f'conversation:{ticket.conversation_id}',
-        json.dumps({'event': 'agent:message', 'content': body.content, 'agent': agent.name}),
-    )
-    return {'message_id': str(msg.id), 'content': msg.content, 'created_at': msg.created_at.isoformat()}
+    channel = 'conversation:' + ticket.conversation_id
+    payload = json.dumps({'event': 'agent:message', 'content': body.content, 'agent': agent.name})
+    await redis.publish(channel, payload)
+    return {
+        'message_id': str(msg.id),
+        'content': msg.content,
+        'created_at': msg.created_at.isoformat(),
+    }
 
 
 @router.post('/tickets/{ticket_id}/resolve', response_model=TicketOut)
 async def resolve_ticket(
-    ticket_id: str, body: ResolveBody,
+    ticket_id: str,
+    body: ResolveBody,
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
     agent: HumanAgent = Depends(get_current_agent),
@@ -147,33 +170,36 @@ async def resolve_ticket(
         raise HTTPException(403, 'Not your ticket')
     if ticket.status == TicketStatus.RESOLVED:
         raise HTTPException(409, 'Already resolved')
-    now                     = _now()
-    res_secs                = int((now - ticket.created_at).total_seconds())
+    now = datetime.now(timezone.utc)
+    res_secs = int((now - ticket.created_at).total_seconds())
     ticket.status           = TicketStatus.RESOLVED
     ticket.resolved_at      = now
     ticket.resolution_notes = body.resolution_notes
     ticket.sla_breach       = res_secs > SLA_SECS
     await db.execute(
-        update(Conversation).where(Conversation.conversation_id == ticket.conversation_id)
+        update(Conversation)
+        .where(Conversation.conversation_id == ticket.conversation_id)
         .values(status='resolved', ended_at=now, resolution_time_seconds=res_secs)
     )
     await db.execute(
-        update(HumanAgent).where(HumanAgent.agent_id == agent.agent_id)
-        .values(current_ticket_count=HumanAgent.current_ticket_count - 1,
-                total_resolved=HumanAgent.total_resolved + 1)
+        update(HumanAgent)
+        .where(HumanAgent.agent_id == agent.agent_id)
+        .values(
+            current_ticket_count=HumanAgent.current_ticket_count - 1,
+            total_resolved=HumanAgent.total_resolved + 1,
+        )
     )
     await db.commit()
     await db.refresh(ticket)
-    await redis.publish(
-        f'ticket:resolved:{ticket_id}',
-        json.dumps({'event': 'ticket:resolved', 'ticket_id': ticket_id}),
-    )
+    channel = 'ticket:resolved:' + ticket_id
+    await redis.publish(channel, json.dumps({'event': 'ticket:resolved', 'ticket_id': ticket_id}))
     return ticket
 
 
 @router.post('/tickets/{ticket_id}/transfer', response_model=TicketOut)
 async def transfer_ticket(
-    ticket_id: str, body: TransferBody,
+    ticket_id: str,
+    body: TransferBody,
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
     agent: HumanAgent = Depends(get_current_agent),
@@ -184,7 +210,9 @@ async def transfer_ticket(
         raise HTTPException(404, 'Ticket not found')
     if ticket.assigned_agent_id != agent.agent_id:
         raise HTTPException(403, 'Not your ticket')
-    tr = await db.execute(select(HumanAgent).where(HumanAgent.agent_id == body.target_agent_id))
+    tr = await db.execute(
+        select(HumanAgent).where(HumanAgent.agent_id == body.target_agent_id)
+    )
     target = tr.scalar_one_or_none()
     if not target:
         raise HTTPException(404, 'Target agent not found')
@@ -192,16 +220,25 @@ async def transfer_ticket(
         raise HTTPException(409, 'Target agent not available')
     ticket.status            = TicketStatus.TRANSFERRED
     ticket.assigned_agent_id = body.target_agent_id
-    await db.execute(update(HumanAgent).where(HumanAgent.agent_id == agent.agent_id)
-                     .values(current_ticket_count=HumanAgent.current_ticket_count - 1))
-    await db.execute(update(HumanAgent).where(HumanAgent.agent_id == body.target_agent_id)
-                     .values(current_ticket_count=HumanAgent.current_ticket_count + 1))
+    await db.execute(
+        update(HumanAgent)
+        .where(HumanAgent.agent_id == agent.agent_id)
+        .values(current_ticket_count=HumanAgent.current_ticket_count - 1)
+    )
+    await db.execute(
+        update(HumanAgent)
+        .where(HumanAgent.agent_id == body.target_agent_id)
+        .values(current_ticket_count=HumanAgent.current_ticket_count + 1)
+    )
     await db.commit()
     await db.refresh(ticket)
-    await redis.publish(
-        f'agent:{body.target_agent_id}:tickets',
-        json.dumps({'event': 'ticket:transferred_to_you', 'ticket_id': ticket_id, 'from': agent.agent_id}),
-    )
+    channel = 'agent:' + body.target_agent_id + ':tickets'
+    payload = json.dumps({
+        'event': 'ticket:transferred_to_you',
+        'ticket_id': ticket_id,
+        'from': agent.agent_id,
+    })
+    await redis.publish(channel, payload)
     return ticket
 
 
@@ -217,10 +254,24 @@ async def ticket_stream(
     if not ticket:
         raise HTTPException(404, 'Ticket not found')
 
+    conv_channel   = 'conversation:' + ticket.conversation_id
+    ticket_channel = 'ticket:resolved:' + ticket_id
+
     async def stream():
         ps = redis.pubsub()
-        await ps.subscribe(
-            f'conversation:{ticket.conversation_id}',
-            f'ticket:resolved:{ticket_id}',
-        )
-        yield f'data: {json.dumps({\
+        await ps.subscribe(conv_channel, ticket_channel)
+        connected = json.dumps({'event': 'connected', 'ticket_id': ticket_id})
+        yield 'data: ' + connected + '\n\n'
+        try:
+            async for raw in ps.listen():
+                if raw['type'] == 'message':
+                    yield 'data: ' + raw['data'] + '\n\n'
+        finally:
+            await ps.unsubscribe()
+            await ps.aclose()
+
+    return StreamingResponse(
+        stream(),
+        media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )

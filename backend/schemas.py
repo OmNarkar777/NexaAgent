@@ -1,26 +1,26 @@
-﻿"""
+"""
 nexaagent/backend/schemas.py
 Pydantic v2 request/response schemas.
 """
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Auth ---
 class UserRegister(BaseModel):
-    email: EmailStr
+    email: str
     password: str = Field(min_length=8, max_length=128)
     tier: str = Field(default="free", pattern="^(free|premium|enterprise)$")
 
 class AgentRegister(BaseModel):
-    email: EmailStr
+    email: str
     password: str = Field(min_length=8, max_length=128)
     name: str = Field(min_length=1, max_length=255)
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 class TokenResponse(BaseModel):
@@ -214,3 +214,4 @@ class DashboardMetrics(BaseModel):
     intent_breakdown: list[IntentBreakdown]
     sentiment_breakdown: list[SentimentBreakdown]
     agent_performance: list[AgentPerformance]
+

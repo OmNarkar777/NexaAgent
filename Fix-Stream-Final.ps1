@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+# Write final chat.py that properly handles LangGraph interrupt
+$chat = @'
+from __future__ import annotations
 import asyncio, json, time, uuid
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -123,3 +125,12 @@ async def chat_stream(
 
     return StreamingResponse(generate(), media_type="text/event-stream",
                               headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+'@
+Set-Content "backend\routers\chat.py" $chat -Encoding UTF8
+Write-Host "chat.py written" -ForegroundColor Green
+
+docker restart nexaagent_backend
+Start-Sleep 20
+docker logs nexaagent_backend --tail 5
+Write-Host ""
+Write-Host "Done! Open http://localhost:3000 and send a message" -ForegroundColor Cyan

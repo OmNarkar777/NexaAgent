@@ -1,4 +1,4 @@
-﻿"""backend/main.py - FastAPI app Phase 2, all routers registered."""
+"""backend/main.py"""
 from __future__ import annotations
 from contextlib import asynccontextmanager
 import json
@@ -22,17 +22,8 @@ async def lifespan(app: FastAPI):
     await dispose_engine()
     logger.info("nexaagent.stopped")
 
-app = FastAPI(
-    title="NexaAgent",
-    description="Production-grade AI customer operations platform",
-    version="2.0.0",
-    lifespan=lifespan,
-)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000","http://localhost:5173"],
-    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-)
+app = FastAPI(title="NexaAgent", version="2.0.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000","http://localhost:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(tickets.router)
@@ -45,18 +36,18 @@ async def conversation_sse(conversation_id: str):
     async def stream():
         redis = await get_redis()
         ps = redis.pubsub()
-        await ps.subscribe(f"conversation:{conversation_id}")
-        yield f"data: {json.dumps({\"event\":\"connected\"})}\n\n"
+        await ps.subscribe("conversation:" + conversation_id)
+        connected = json.dumps({"event": "connected"})
+        yield "data: " + connected + "\n\n"
         try:
             async for msg in ps.listen():
                 if msg["type"] == "message":
-                    yield f"data: {msg[\"data\"]}\n\n"
+                    yield "data: " + msg["data"] + "\n\n"
         finally:
             await ps.unsubscribe()
             await ps.aclose()
-    return StreamingResponse(stream(), media_type="text/event-stream",
-                              headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
 @app.get("/health")
 async def health():
-    return {"status":"ok","service":"nexaagent","version":"2.0.0"}
+    return {"status": "ok", "service": "nexaagent", "version": "2.0.0"}
